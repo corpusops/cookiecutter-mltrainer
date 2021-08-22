@@ -1,0 +1,19 @@
+
+[program:gunicorn]
+# use gosu to have all mltrainer groups
+command = gosu mltrainer sh -c 'set -ex \
+  && exec gunicorn {{ .Env.MLTRAINER_WSGI }} -w {{ .Env.GUNICORN_WORKERS }} -b {{ .Env.MLTRAINER_LISTEN }} -k {{ .Env.GUNICORN_CLASS }} {{ .Env.GUNICORN_EXTRA_ARGS}}'
+autostart = true
+autorestart = true
+killasgroup = true
+stopasgroup = true
+directory = /code/src
+stopsignal = KILL
+stopwaitsecs = 3
+stdout_logfile = /dev/stdout
+stderr_logfile = /dev/stderr
+stdout_logfile_maxbytes = 0
+stderr_logfile_maxbytes = 0
+stdout_logfile_backups = 0
+stderr_logfile_backups = 0
+
