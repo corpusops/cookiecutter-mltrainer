@@ -1,0 +1,3 @@
+---
+cops_{{cookiecutter.app_type}}_deploy_env: prod
+cops_mltrainer_http_protect_password: ""

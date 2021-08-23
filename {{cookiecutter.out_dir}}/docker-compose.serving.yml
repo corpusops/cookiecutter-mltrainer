@@ -1,0 +1,17 @@
+services:
+  tensorflow:
+    image: makinacorpus/mlflow-server:1.11.0-tensorflowserving
+    environment:
+    # semicolon separated list of models to serve
+    MLFLOW_MODELS: "${MLFLOW_MODELS:-}"
+    MLFLOW_TRACKING_URI: "${MLFLOW_TRACKING_URI:-http://host.docker.internal:5000}"
+    AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-minio}"
+    AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-minio123}"
+    AWS_STORAGE_BUCKET_NAME: "${AWS_STORAGE_BUCKET_NAME:-mlflow}"
+    AWS_S3_ENDPOINT_URL: "${AWS_S3_ENDPOINT_URL:-http://host.docker.internal:9000/}"
+    MLFLOW_S3_ENDPOINT_URL: "${MLFLOW_S3_ENDPOINT_URL:-http:/host.docker.internal:9000/}"
+    volumes:
+    - tflow-data:/data
+    ports:
+    - 8500:8500
+    - 8501:8501

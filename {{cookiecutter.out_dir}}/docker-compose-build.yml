@@ -1,0 +1,12 @@
+version: '3.7'
+x-images:
+  {{cookiecutter.app_type}}: &{{cookiecutter.app_type}}
+    build:
+      context: "."
+      args:
+        PY_VER: "${MLTRAINER_PY_VER:-{{cookiecutter.py_ver}}}"
+        WITH_VSCODE: "${WITH_VSCODE:-0}"
+        VSCODE_VERSION: "${VSCODE_VERSION-}"
+        BASE: "${MLTRAINER_BASE_IMAGE:-{{cookiecutter.base_image}}}"
+services:
+  {{cookiecutter.app_type}}: {<<: [ *{{cookiecutter.app_type}} ]}

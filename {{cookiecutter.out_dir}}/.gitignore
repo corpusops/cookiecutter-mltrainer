@@ -1,0 +1,80 @@
+# Python
+*.pyc
+__pycache__
+*.egg-info
+*.mo
+
+# {{cookiecutter.app_type.upper()}} local settings
+/src/{{cookiecutter.mltrainer_settings.replace('.', '/')}}/local.py
+
+# Docker local settings
+/.env
+/docker.env
+/netrc
+.cache
+CACHE
+
+# IDE settings
+.vscode
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea
+*.iml
+.~lock*
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+
+# compiled output
+/dist
+/tmp
+/angular/**/*.js
+/angular/**/*.json
+!/angular/**/tsconfig.*.json
+/angular/**/*.map
+docs/_build/
+
+# dependeDB Files
+/node_modules
+
+# Virtualenv
+/venv/
+/.tox
+/.env*
+/mlruns
+mlflow_status.json
+
+# corpusops & ansible
+*.retry
+/.ansible/scripts/ansible_deploy_env
+/local/*
+!/local/regen.sh
+
+# misc
+build
+/data
+/.sass-cache
+/connect.lock
+/coverage/*
+.coverage
+/libpeerconnection.log
+npm-debug.log
+testem.log
+yarn-error.log
+/typings
+*~
+/src/project/static/dist/
+
+# e2e
+/e2e/*.js
+/e2e/*.map
+
+#system files
+.ds_store
+
+# DB Files
+*.sqlite3

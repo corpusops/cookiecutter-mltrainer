@@ -1,0 +1,6 @@
+---
+# do not remember that you can edit general vault with
+# .ansible/scripts/edit_vault.sh  .ansible/inventory/group_vars/all/default.yml
+#
+# generate with
+# </dev/urandom tr -dc 'A-Za-z0-9' | head -c 8; echo

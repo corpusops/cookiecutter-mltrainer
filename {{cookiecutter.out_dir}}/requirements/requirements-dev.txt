@@ -1,0 +1,16 @@
+# development
+coverage
+eradicate
+isort
+pylama
+pycodestyle
+pytest-cov
+pytest-xdist
+tblib
+tox
+tox-direct
+{% if cookiecutter.with_black %}black{% endif %}
+xlrd
+# https://github.com/ipython/ipython/issues/12740
+jedi<0.18.0
+ipython

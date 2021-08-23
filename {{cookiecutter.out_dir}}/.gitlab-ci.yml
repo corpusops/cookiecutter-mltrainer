@@ -1,0 +1,700 @@
+{%- set envs = ['dev', 'qa', 'staging', 'prod'] %}
+{%- set devhostdeploycomment = (not cookiecutter.dev_host) and '#  ' or '' %}
+{%- set envstrs = cookiecutter.gitlabci_envs.split()|join(', ') %}
+{%- set envbranchs = [] %}
+{%- for i in cookiecutter.gitlabci_envs.split()%}{% if cookiecutter.get(i+'_host')%}
+{%- set _ = envbranchs.append(cookiecutter[i+'_branch']) %}
+{%- endif %}{%endfor %}
+{%- set masterenvstrs = (['master']+envbranchs)|join(', ') %}
+{%- set mastertagsenvstrs = (['master','tags']+envbranchs)|join(', ') -%}
+{% set testsc = (not cookiecutter.test_tests) and '#' or '' -%}
+{% set lintingc = (not cookiecutter.test_linting) and '#' or '' -%}
+# - To setup the pipeline you need to configure those CICD Variables:
+# - CORPUSOPS_VAULT_PASSWORD if deploying with ansible
+# - REGISTRY_USER docker registry user
+# - REGISTRY_PASSWORD docker registry password
+# - make sure cachedir and builddir runner directories are shared between stages
+image: {name: "${COMPOSE_IMAGE}", entrypoint: [""]}
+stages:
+- manual_jobs
+- build_test_release
+- end_flag
+- post_release
+
+variables:
+  # Keep this two next vars
+  GIT_SSL_CAPATH: /etc/ssl/certs/
+  GIT_SUBMODULE_STRATEGY: recursive
+  # we need for now a specific dind version to be sure to use Buildkit to build images (cache & speed gain)
+  # but then legacy builder to squash them (as a side effect to drastically shrink down their size)
+  # DOCKERDIND_IMAGE: "docker:20.10.0-beta1-dind"
+  DOCKERDIND_IMAGE: "{{cookiecutter.dind_image}}"
+  DOCKER_TEST_IMAGE: "{{cookiecutter.docker_test_image}}"
+  CORPUSPOS_IMAGE: "{{cookiecutter.corpusops_image}}"
+  COMPOSE_IMAGE: "{{cookiecutter.compose_image}}"
+  REGISTRY_IMAGE: "{{cookiecutter.registry_image}}"
+  NODE_IMAGE: "{{cookiecutter.node_image}}"
+  #
+  BUILDKIT_PROGRESS: plain
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_DRIVER: overlay2
+  #
+  NONINTERACTIVE: "1"
+  TZ: Europe/Paris
+  DOCKER_REGISTRY: {{cookiecutter.docker_registry}}
+  # for activating buildkit which is really better at caching and buildspeed
+  DOCKER_BUILDKIT: "1"
+  COMPOSE_DOCKER_CLI_BUILD: "1"
+  # Configure your registry credentials in your CI secret variables
+  REGISTRY_USER: "{{cookiecutter.registry_user}}"
+  REGISTRY_PASSWORD: "{{cookiecutter.registry_password}}"
+  # services launched during tests
+  DOCKER_SERVICES: "{% if cookiecutter.cache_system%} {{cookiecutter.cache_system}}{%endif%}"
+  # Those services underlying images will be built
+  DOCKER_BUILT_SERVICES: "{{cookiecutter.app_type}}"
+  # Main image
+  DOCKER_IMAGE: "{{cookiecutter.simple_docker_image}}"
+  # cache registry setup
+  REGISTRY_LOG_LEVEL: info
+  REGISTRY_ROOTDIRECTORY: /cache/cachedockerregistry
+  BUILDCACHE_REGISTRY_DEBUG: "1"
+  BUILDCACHE_REGISTRY: "dockerregistries:5000"
+  PROXYCACHE_REGISTRY: "dockerregistries:6000"
+  PROXYCACHE_ROOTDIRECTORY:   /cache/cachedockerregistry/proxy
+  PROXYCACHE_PROXIEDREGISTRY: "https://registry-1.docker.io"
+  # Build pipeline images flavors: build/tags/master
+  BUILDCACHE_CURRENT_DOCKER_IMAGE: "${BUILDCACHE_REGISTRY}/${DOCKER_IMAGE}:build-${CI_PIPELINE_IID}"
+  BUILDCACHE_REF_DOCKER_IMAGE:     "${BUILDCACHE_REGISTRY}/${DOCKER_IMAGE}:${CI_COMMIT_REF_NAME}"
+  BUILDCACHE_LATEST_DOCKER_IMAGE:  "${BUILDCACHE_REGISTRY}/${DOCKER_IMAGE}:latest"
+  # Released images flavors: build/forcedrelease/tags/master
+  CURRENT_DOCKER_IMAGE: "${DOCKER_REGISTRY}/${DOCKER_IMAGE}:build-${CI_PIPELINE_IID}"
+  FORCED_DOCKER_IMAGE:     "${DOCKER_REGISTRY}/${DOCKER_IMAGE}:forced${CI_COMMIT_REF_NAME}"
+  REF_DOCKER_IMAGE: "${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${CI_COMMIT_REF_NAME}"
+  LATEST_BRANCH: master
+  LATEST_DOCKER_IMAGE: "${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest"
+  # Allow to have many compose stacks aside.
+  D_COMPOSE: docker-compose --verbose
+  COMPOSE_PROD_CONFIGS: docker-compose.yml docker-compose-prod.yml docker-compose-build.yml
+  COMPOSE_DEV_CONFIGS:  docker-compose.yml docker-compose-dev.yml  docker-compose-build.yml docker-compose-build-dev.yml
+  DEPLOY_PLAYBOOK: "{{cookiecutter.deploy_playbook}}"
+  PROJECT_CACHE_ROOT:       /cache/$CI_PROJECT_PATH_SLUG
+  BUILDCACHE_ROOTDIRECTORY: /cache/$CI_PROJECT_PATH_SLUG/dockercache
+  WORKSPACE:                /cache/$CI_PROJECT_PATH_SLUG/w/${CI_PIPELINE_IID}
+  # needed to have docker volumes in a shared folder between job/stages
+  COMMONHOSTSFILE:          /cache/$CI_PROJECT_PATH_SLUG/w/${CI_PIPELINE_IID}/${CI_JOB_STAGE}.hosts
+  SERVICES_TOWER_FLAG:      /cache/$CI_PROJECT_PATH_SLUG/w/${CI_PIPELINE_IID}/status_flags_servicestower
+  REGISTRIES_FLAG:          /cache/$CI_PROJECT_PATH_SLUG/w/${CI_PIPELINE_IID}/status_flags_registries
+  DOCKERD_FLAG:             /cache/$CI_PROJECT_PATH_SLUG/w/${CI_PIPELINE_IID}/status_flags_dockerd
+  JSBUILD_STATUS_FLAG:      /cache/$CI_PROJECT_PATH_SLUG/w/${CI_PIPELINE_IID}/status_flags_jsbuild
+  BUILD_STATUS_FLAG:        /cache/$CI_PROJECT_PATH_SLUG/w/${CI_PIPELINE_IID}/status_flags_build
+  TESTS_STATUS_FLAG:        /cache/$CI_PROJECT_PATH_SLUG/w/${CI_PIPELINE_IID}/status_flags_tests
+  LINT_STATUS_FLAG:         /cache/$CI_PROJECT_PATH_SLUG/w/${CI_PIPELINE_IID}/status_flags_lint
+  RELEASE_STATUS_FLAG:      /cache/$CI_PROJECT_PATH_SLUG/w/${CI_PIPELINE_IID}/status_flags_release
+  PIPELINE_FLAG:            /cache/$CI_PROJECT_PATH_SLUG/w/${CI_PIPELINE_IID}/status_flags_pipeline
+  BEFORE_STATUS_TIMEOUT: "900"
+  AFTER_STATUS_TIMEOUT: "1800"
+  PRELOAD_BUILDCACHE_IMAGES: ${BUILDCACHE_REF_DOCKER_IMAGE}-nosquash $BUILDCACHE_CURRENT_DOCKER_IMAGE $BUILDCACHE_REF_DOCKER_IMAGE $BUILDCACHE_LATEST_DOCKER_IMAGE
+  PRELOAD_RELEASED_IMAGES: $REF_DOCKER_IMAGE $LATEST_DOCKER_IMAGE
+  TAGGUABLE_IMAGE_BRANCH: "^(master|dev|qa|staging|prod)$"
+  # To speed up all builds we may cache in Controls which branch is used to generate image cache tarball
+  CACHE_DAYS: "7"
+  # {{cookiecutter.lname}} settings
+{%-if cookiecutter.use_submodule_for_deploy_code%}
+  MLTRAINER_DEPLOY_VERSION: origin/stable
+{%endif%}
+  PROJECT_COMMON_DEPLOY_DIR: {{cookiecutter.deploy_project_dir}}
+  # debug
+  NO_SILENT: ""
+  NO_SQUASH: ""
+  # See https://github.com/docker/compose/issues/7336
+  # If CACHEFROM sources order seems correct, and if there are still too much of no hits during docker build,
+  # set the bellow variable to 1, otherwrise unset
+  # The only penalty will be that a local cache must still reside on the runner to have a chance to benefit from it
+  # Already pushed images to the central registry won't be used as cache sources.
+  DC_LOCAL_CACHE_ONLY: ""
+
+# NEVER ever use gitlab-ci cache, its broken by design in most case of CI related tasks
+# when it comes to parrallel builds reusing local artefacts during jobs thorough the
+# pipeline. Indeed, as gitlab-ci saves cache to zipfiles, what would occcur
+# is that the result of a first be would be overwritte/corrupted by the result
+# of a parrallel, quickier, second build !!!
+# That's why, you 'd better have to use a shared volume in your runner configuration,
+# and we by default use /cache.
+# Be ware that you also must use a host volume (not a docker one !)
+# /!\: BIG_WARNING: this cache is common to all projets using this runner !
+# cache:
+#   key: "${CI_PROJECT_PATH_SLUG}"
+#   paths:
+#     - /var/cache/apt/
+#     - .ci_cache_$CI_PIPELINE_IID
+#     - .ci_cache
+
+# /!\  /!\  /!\
+# We use (ba)sh -c to enforce multiple levels of variables resolution,
+# please see https://gitlab.com/gitlab-org/gitlab-runner/-/issues/1809
+# Indeed, gitlab-ci would not interpret multiple nested variables
+# /!\  /!\  /!\
+#
+before_script: &top_before_script
+- &createdirs for i in ${WORKSPACE} ${PROJECT_CACHE_ROOT}/apt;do if [ ! -e "$i" ];then mkdir -pv "$i";fi;done
+- &definefuncs |-
+   set -e;if [ ! -e "${WORKSPACE}/funcs" ];then cat>"${WORKSPACE}/funcs"<<'EOF'
+   to_squash() {
+    # as squashing is a slow and consuming operation, only do it for releasable pipelines
+    if ! ( echo ${CI_COMMIT_REF_NAME} | egrep -q "$TAGGUABLE_IMAGE_BRANCH" );then NO_SQUASH=1;fi;
+    # but let users have the FORCE_NO_SQUASH env var to force it (set it to everything but 1)
+    export NO_SQUASH=${FORCE_NO_SQUASH-${NO_SQUASH-}};
+    test "x${NO_SQUASH}" != "x1"
+   }
+   log() { echo "$@">&2; }
+   die() { log "$@";exit 1; }
+   vv() { log "$@";"$@"; }
+   #
+   rcu() { u=$1;shift;vv curl -sku gitlab:gitlab "$@" http://${BUILDCACHE_REGISTRY}/v2/$u; }
+   lcu() { u=$1;shift;vv curl -sku gitlab:gitlab "$@" http://localhost:5000/v2/$u; }
+   vvrgc() { vv registry garbage-collect $@ ${c}; }
+   #
+   wait_ready() { s="${s:-0.5}";t="${t:-800}";start=$(date +%s);until ("$@";);do
+    d=$(date +%s);dt=$((${d}-${start}));if [ ${dt} -gt ${t} ];then log "  no more retries: $@";return 1;fi
+    if [ $(( ${dt} % ${CI_OPEN_MSG_DELAY:-240} )) -eq 0 ];then log "  CI keeps open";fi
+    (cat /dev/zero|read -t ${s}||exit 0);done; }
+   vwait_ready() { vv wait_ready "$@"; }
+   #
+   wait_hostsfile() { set -e;grep -q dockerregistries "${COMMONHOSTSFILE}" >/dev/null 2>&1; }
+   add_hosts() { cat "${COMMONHOSTSFILE}">>/etc/hosts; }
+   refresh_gitlab_services() { t=240 vv wait_ready wait_hostsfile && add_hosts; }
+   wait_docker() { docker system info >/dev/null 2>&1; }
+   wait_registries() { ( set -ex;for s in ${REGISTRIES:-${PROXYCACHE_REGISTRY} ${BUILDCACHE_REGISTRY}};do \
+                         printf "test"|nc -w 2 ${s//:/ };done; ) }
+                         # printf "test"|nc -w 2 ${s//:/ } >/dev/null 2>&1;done; ) }
+   wait_flags() { for i in $@;do test -e $(eval echo ${i});done; }
+   EOF
+   fi;. "${WORKSPACE}/funcs"
+- &cleanupstatusflag if [ -e "${STATUS_FLAG}" ];then rm -f "${STATUS_FLAG}";fi
+- &netlinkservices refresh_gitlab_services
+- &waitbeforejobs |-
+  set -e
+  for f in ${BEFORE_STATUS_FLAGS-};do
+    f=$(eval echo ${f});t=${BEFORE_STATUS_TIMEOUT} vwait_ready wait_flags "${f}"
+    if ( egrep -v 0 "${f}" );then exit $(cat "${f}");fi
+  done
+  for f in ${BEFORE_ALLOW_FAILURE_STATUS_FLAGS-};do
+    f=$(eval echo ${f});t=${BEFORE_STATUS_TIMEOUT} vwait_ready wait_flags "${f}"
+  done
+- &upgradedocker
+  set -e;
+  rp="$(pwd)/local/out/docker";
+  if ( docker --version >/dev/null 2>&1) && [ "x${UPGRADE_DOCKER}" = "x1" ];then
+    docker run --rm -v "${rp}:/out" --entrypoint sh ${DOCKERDIND_IMAGE} -ec 'cp -v /usr/local/bin/docker* /out';
+    cp -fv "${rp}/docker"* /usr/local/bin;docker --version || /bin/true;
+  fi
+- &linkapt set -e;if [ -e /var/cache/apt ];then rm -rf /var/cache/apt/archives;ln -s ${PROJECT_CACHE_ROOT}/apt /var/cache/apt/archives;fi
+- &settz ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo ${TZ} > /etc/timezone
+- &pullsubmodules
+    set -e;if ! (git --version >/dev/null 2>&1);then apk update;apk add git;fi &&
+    cd ${PROJECT_COMMON_DEPLOY_DIR};git fetch origin;git reset --hard $MLTRAINER_DEPLOY_VERSION --;cd - >/dev/null 2>&1
+# first registry login does not have to success, we only want it to be available on release
+- &gendockerlogin |-
+  set -e;cat > /docker_login <<EOF
+  set -e
+  if [ "x${REGISTRY_PASSWORD}" != "x" ];then
+  echo "login to $DOCKER_REGISTRY" >&2
+  echo "$REGISTRY_PASSWORD" \
+    | docker login "$DOCKER_REGISTRY" --username="$REGISTRY_USER" --password-stdin
+  fi
+  echo "login to $BUILDCACHE_REGISTRY" >&2
+  echo gitlab \
+    | docker login $PROXYCACHE_REGISTRY --username gitlab --password-stdin
+  echo gitlab \
+    | docker login $BUILDCACHE_REGISTRY --username gitlab --password-stdin
+  touch /docker_login_success
+  EOF
+  chmod +x /docker_login
+- &nonfaildockerlogin /docker_login || /bin/true
+# workaround as docker-compose doesn't support default shell variable substitution in .env
+- &gendotenv set -e;if ! ( envsubst --version >/dev/null 2>&1 );then apk update;apk add gettext;fi;
+  for env in .env docker.env;do cat ${env}.dist | envsubst | sed -r
+  -e "s/^([^=]+_IMAGE_VERSION=.*)latest/\\1build-${CI_PIPELINE_IID}/g"
+  -e "s|$DOCKER_REGISTRY|$BUILDCACHE_REGISTRY|g"
+  -e "s/^(CI_COMMIT_SHA=).*/\\1${CI_COMMIT_SHA}/g" > $env;done;
+# to speed up pipelines, we assemble the 2 registry services into one single one
+# in the fist service, we spawn two registries, one for dockerhub cache, and one for builds
+# indeed, when a registry is in pullthrough mode, we cant push to it custom images.
+# Purpose of his dummy job is to maintain in life the registries and docker daemon up to the end of the
+# pipeline without having to reload at each stage from cold resources (Huge gain of time !).
+# The trick to make a long living job (so a job which is launched and non blocking for others
+# is to trigger a when:manual/allow_failure:true which will live along all the pipeline
+services: &services_tpl
+- name: ${REGISTRY_IMAGE}
+  alias: dockerregistries
+  entrypoint: [sh]
+  command:
+  - "-exc"
+  - |-
+    export REGISTRY_LOG_LEVEL=${REGISTRY_LOG_LEVEL:-debug}
+    if [ "x${REGISTRY_LOG_LEVEL-}" = "xdebug" ];then set -x;fi
+    #
+    cn=dockerregistries
+    export REGISTRY_ROOTDIRECTORY=${REGISTRY_ROOTDIRECTORY:-"/cache/cachedockerregistry"}
+    s="${REGISTRY_ROOTDIRECTORY}/ssl"
+    export PROXYCACHE_REGISTRY=${PROXYCACHE_REGISTRY:-${cn}:6000}
+    export BUILDCACHE_REGISTRY=${BUILDCACHE_REGISTRY:-${cn}:5000}
+    export PROXYCACHE_PROXIEDREGISTRY=${PROXYCACHE_PROXIEDREGISTRY:-"https://registry-1.docker.io"}
+    export REGISTRY_STORAGE_DELETE_ENABLED=True
+    export REGISTRY_HTTP_ADDR=":${BUILDCACHE_REGISTRY//*:}"
+    export REGISTRY_AUTH_HTPASSWD_REALM=basic-realm
+    export REGISTRY_AUTH_HTPASSWD_PATH=/htpasswd
+    export REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=${BUILDCACHE_ROOTDIRECTORY}
+    export REGISTRY_HTTP_TLS_CERTIFICATE=${s}/${cn}.c.crt
+    export REGISTRY_HTTP_TLS_KEY=${s}/${cn}.c.key
+    #
+    user=;pw=;echo "${DOCKER_AUTH_CONFIG-}">dockerauth
+    if ( grep -q auths dockerauth );then
+      if ! ( jq --version >/dev/null 2>&1 );then apk update && apk add jq;fi
+      dauth=$(cat dockerauth|jq '.auths|to_entries[]|select(.key|match("docker[.](com|io)"))|.value.auth')
+      echo ${dauth} >&2
+      user=$(echo ${dauth}|jq '@base64d|split(":")[0]')
+      pw=$(echo ${dauth}|jq '@base64d|split(":")[1:]|join(":")')
+    elif [ "x${DOCKERHUB_PASSWORD-}" != "x" ];then
+      user=${DOCKERHUB_USER-}; pw=${DOCKERHUB_PASSWORD-};
+    fi
+    if [ "x${pw}" != "x" ];then
+      export REGISTRY_PROXY_USERNAME="${user}";export REGISTRY_PROXY_PASSWORD="${pw}"
+    fi
+    # creds: gitlab / gitlab
+    printf 'gitlab:$2y$05$hCvFNwJZBGGlIGzQ0sZZw.Eoijz9CcblylhqQqettP.JnCMrwQMk6\n\n'>/htpasswd
+    #
+    if [ ! -e "${s}" ];then mkdir -pv ${s}; fi
+    if [ ! -e "${s}/${cn}.c.crt" ] || [ ! -e "${s}/${cn}.ca.crt" ];then
+      if ! ( openssl --version >/dev/null 2>&1 );then apk update && apk add openssl;fi
+      openssl genrsa -out "${s}/${cn}.ca.key" 4096 && openssl genrsa -out "${s}/${cn}.c.key" 4096
+      openssl req -batch -x509 -new -nodes -key "${s}/${cn}.ca.key" -sha256 -days 34675 \
+        -subj "/CN=${cn}Cacert/" -out "${s}/${cn}.ca.crt"
+      openssl req -batch -new -sha256 -key "${s}/${cn}.c.key" -subj "/CN=${cn}/" -out "${s}/${cn}.c.csr"
+      openssl x509 -req -in "${s}/${cn}.c.csr" -CA "${s}/${cn}.ca.crt" -CAkey "${s}/${cn}.ca.key" \
+        -CAcreateserial -out "${s}/${cn}.c.crt" -days 34675 -sha256
+    fi
+    ( unset REGISTRY_AUTH_HTPASSWD_REALM REGISTRY_AUTH_HTPASSWD_PATH \
+      && export REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY="${PROXYCACHE_ROOTDIRECTORY}" \
+      && export REGISTRY_HTTP_ADDR=":${PROXYCACHE_REGISTRY//*:}"  \
+      && export REGISTRY_PROXY_REMOTEURL="${PROXYCACHE_PROXIEDREGISTRY}" \
+      && /entrypoint.sh serve /etc/docker/registry/config.yml )&
+    /entrypoint.sh serve /etc/docker/registry/config.yml
+# - workaround https://gitlab.com/gitlab-org/gitlab-runner/-/issues/1042
+#   we wait for main container to start to have network connectivity between services
+- name: ${DOCKERDIND_IMAGE}
+  alias: docker
+  entrypoint: [sh]
+  command:
+  - "-ec"
+  - |-
+    while [ ! -f "${WORKSPACE}/funcs" ];do sleep 1;done
+    . "${WORKSPACE}"/funcs
+    refresh_gitlab_services
+    export PROXYCACHE_REGISTRY=${PROXYCACHE_REGISTRY:-${cn}:6000}
+    export BUILDCACHE_REGISTRY=${BUILDCACHE_REGISTRY:-${cn}:5000}
+    export REGISTRY_ROOTDIRECTORY=${REGISTRY_ROOTDIRECTORY:-"/cache/cachedockerregistry"}
+    cp -v ${REGISTRY_ROOTDIRECTORY}/ssl/*.crt /usr/local/share/ca-certificates && update-ca-certificates
+    dockerd-entrypoint.sh --experimental --registry-mirror https://${PROXYCACHE_REGISTRY}
+
+.manual_job_tpl: &manual_job_tpl
+  tags: ["{{cookiecutter.runner_tag}}"]
+  allow_failure: true
+  stage: manual_jobs
+  when: manual
+  only: [{{mastertagsenvstrs}}]
+  except: []
+
+cleanup_all_project_cache:
+  <<: [ *manual_job_tpl ]
+  before_script: []
+  script:
+  - &cleanup_all_project_cache rm -rf ${PROJECT_CACHE_ROOT}
+
+cleanup_all_docker_registries: &cleanup_all_docker_registries_tpl
+  <<: [ *manual_job_tpl ]
+  before_script: []
+  script:
+  - &cleanupcacheregistry   rm -rfv ${BUILDCACHE_ROOTDIRECTORY}/*
+  - &cleanupprojectregistry rm -rfv ${PROXYCACHE_ROOTDIRECTORY}/*
+
+cleanup_project_docker_registry: &cleanup_project_docker_registry_tpl
+  <<: [ *cleanup_all_docker_registries_tpl ]
+  script: [ *cleanupprojectregistry ]
+
+.build: &build_tpl
+  tags: ["{{cookiecutter.runner_tag}}"]
+  stage: build_test_release
+  when: delayed
+  start_in: 1 seconds
+  services: []
+  script:
+  - *definefuncs
+  - &writeokstatus |-
+    set -e;f=$(eval echo ${STATUS_FLAG});if [ "x${f}" != "x" ];then echo 0 > "${f}";fi
+  # we need to wait for statuses of other jobs of this stage as the build job holds the shared services
+  - &waitafterjobs |-
+    set -e
+    for f in ${AFTER_STATUS_FLAGS-};do
+      f=$(eval echo ${f});t=${AFTER_STATUS_TIMEOUT} vwait_ready wait_flags "${f}"
+      if ( egrep -v 0 "${f}" );then exit $(cat "${f}");fi
+    done
+    for f in ${AFTER_ALLOW_FAILURE_STATUS_FLAGS-};do
+      f=$(eval echo ${f});t=${AFTER_STATUS_TIMEOUT} vwait_ready wait_flags "${f}"
+    done
+  after_script:
+  - &writenokstatus |-
+    set -e;f=$(eval echo ${STATUS_FLAG});if [ "x${f}" != "x" ] && [ ! -e "${f}" ];then echo 3 > "${f}";fi
+
+services_tower: &services_tower_tpl
+  <<: [ *build_tpl ]
+  when: always
+  start_in: null
+  variables: &services_tower_vars
+    UPGRADE_DOCKER: "1"
+    STATUS_FLAG: ${SERVICES_TOWER_FLAG}
+    AFTER_STATUS_FLAGS: ${RELEASE_STATUS_FLAG}
+  services: *services_tpl
+  before_script: &full_before_script
+  - *createdirs
+  - *cleanupstatusflag
+  script:
+  - *definefuncs
+  - &writeservivestohosts egrep "\s+(dockerregistries|docker)" /etc/hosts>"${COMMONHOSTSFILE}"
+  - &waitforservices
+    set -e
+    && t=${REGISTRIES_TIMEOUT:-180} vwait_ready wait_registries
+    && t=${DOCKER_TIMEOUT:-240} vwait_ready wait_docker
+    && t=${DOCKER_PULLTEST_TIMEOUT:-160} vwait_ready docker pull ${DOCKER_TEST_IMAGE}
+  - *writeokstatus
+  - *waitafterjobs
+  after_script:
+  - *writenokstatus
+
+build_images: &build_images
+  <<: [ *build_tpl ]
+  start_in: 40 seconds
+  variables: &build_images_vars
+    UPGRADE_DOCKER: "1"
+    STATUS_FLAG: ${BUILD_STATUS_FLAG}
+    BEFORE_STATUS_FLAGS: ${SERVICES_TOWER_FLAG}
+  script:
+  - *definefuncs
+  - &build_step1 |-
+    set +e
+    # copy in compose image the wanted docker binary version
+    docker-compose --version
+    if [ "x${CI_BYPASS_DOCKERBUILD-}" != "x" ];then sed -i "5,$ d" local/*deploy-common/Dockerfile;fi
+    dc_build() {
+      cfgs="${@}"
+      MAIN_COMPOSE=$(echo $cfgs|awk '{print $1}')
+      dcoverrides=$(mktemp).composegitlab.yml
+      cat>${dcoverrides}<<EOFCACHE
+    ---
+    $(grep ^version: ${MAIN_COMPOSE}|head -n1)
+    EOFCACHE
+      cfgs="${cfgs} ${dcoverrides}"
+      dc="$D_COMPOSE" && for i in ${cfgs};do dc="$dc -f ${i}";done
+      cimg=$($dc config|docker run --rm -i --entrypoint yq mikefarah/yq:4 e ".services.${service}.image" -)
+      # As per https://github.com/moby/moby/issues/39003, when a tag is built with BUILDKIT_INLINE_CACHE
+      # and https://github.com/docker/compose/issues/7336
+      # be sure 1. to not touch it (retag, or anything) before pushing it to registry or you won't be
+      # able to cacheHit in next builds, so we isolate the tag to not touch it after !
+      # 2. to have sources order correct, and if there are still too much of no hits, uncomment bellow the
+      # local source only selector by Activating DC_LOCAL_CACHE_ONLY=1
+      simg=${cimg}-nosquash
+      simg=${simg//dev-nosquash/nosquash-dev}
+    cat>>${dcoverrides}<<EOFCACHE
+    services:
+      ${service}:
+        image: ${simg}
+        build:
+    EOFCACHE
+      #
+      if [ "x${PRELOAD_BUILDCACHE_IMAGES}${PRELOAD_RELEASED_IMAGES}" != "x" ];then
+        echo "      cache_from:" >> ${dcoverrides}
+        for img in $(echo ${PRELOAD_BUILDCACHE_IMAGES} ${PRELOAD_RELEASED_IMAGES}|xargs -n 1|awk '!seen[$0]++');do
+          img=$(eval echo ${img})
+          dcadd=
+          if [ "x${DC_LOCAL_CACHE_ONLY-}" = "x" ];then
+            dcadd=1
+          elif ( echo ${img}|grep -q "$BUILDCACHE_REGISTRY" );then
+            if !(to_squash) && ( echo ${img} | grep -vq nosquash );then
+              dcadd=1
+            elif (to_squash) && ( echo ${img} | grep  -q nosquash );then
+              dcadd=1
+            else
+              dcadd=
+            fi
+          else
+            dcadd=
+          fi
+          if [ "x${dcadd}" != "x" ];then
+            if ( echo "${cfgs}" | egrep -q -- '-dev.yml' );then
+              echo "      - \"${img}-dev\"" >> ${dcoverrides}
+            else
+              echo "      - \"${img}\"" >> ${dcoverrides}
+            fi
+          fi
+        done
+      fi
+      log "Using docker-compose overrides:"
+      log "$(cat ${dcoverrides})"
+      # use buildkit and his fantastic cache handling
+      vv ${dc} build --build-arg BUILDKIT_INLINE_CACHE=1 ${service} \
+      || ( echo "BUILD ERROR(${cfgs}): ${service}" >> /docker_images_errors )
+      vv docker inspect ${simg} >/dev/null 2>&1||die "failed building ${simg}"
+      # squash images as docker-compose does not support it nativly
+      if (to_squash);then
+        # compute the docker-compose service build: args back to docker CLI build-args
+        buildargs=$($dc config\
+            |docker run -i --rm --entrypoint yq mikefarah/yq:4 e .services.${service}.build.args - -j\
+            |docker run -i --rm imega/jq ".|to_entries[]|\" --build-arg \(.key)=\(.value)\"" -j)
+        if !(vv docker build --squash -t ${cimg} . $buildargs);then exit 1;fi
+      else
+        vv docker tag ${simg} ${cimg}
+      fi
+    }
+    for service in $DOCKER_BUILT_SERVICES;do
+      vv dc_build ${COMPOSE_PROD_CONFIGS}
+      vv dc_build ${COMPOSE_DEV_CONFIGS}
+    done
+    if [ -e /docker_images_errors ];then cat /docker_images_errors;exit 1;fi
+    set +x
+  - &build_step2 |-
+    set -e
+    vv docker inspect ${BUILDCACHE_CURRENT_DOCKER_IMAGE}     >/dev/null
+    vv docker inspect ${BUILDCACHE_CURRENT_DOCKER_IMAGE}-dev >/dev/null
+    if (to_squash);then
+     vv docker inspect ${BUILDCACHE_CURRENT_DOCKER_IMAGE}-nosquash     >/dev/null
+     vv docker inspect ${BUILDCACHE_CURRENT_DOCKER_IMAGE}-nosquash-dev >/dev/null
+    fi
+  - *writeokstatus
+  - *waitafterjobs
+
+.tests_tpl: &tests_tpl
+  <<: [ *build_tpl ]
+  start_in: 100 seconds
+  variables: &test_vars_tpl
+    CI: "true"
+    BEFORE_STATUS_FLAGS: ${BUILD_STATUS_FLAG}
+  script:
+  - &launch_test_stack
+    echo CONTROL_COMPOSE_FILES=$(echo ${COMPOSE_PROD_CONFIGS}|awk '{print $1}')>>.env;
+    set -e;apk update -q;apk add -q bash;echo COMPOSE_PROJECT_NAME=run${CI_PIPELINE_IID}_${CI_JOB_ID}>>.env;
+    for i in $DOCKER_SERVICES;do ./control.sh up --force-recreate --no-deps $i;done
+  - *writeokstatus
+  allow_failure: true
+
+{{testsc}}tests:
+{{testsc}}  <<: [ *tests_tpl ]
+{{testsc}}  variables:
+{{testsc}}    <<: [ *test_vars_tpl ]
+{{testsc}}    STATUS_FLAG: ${TESTS_STATUS_FLAG}
+{{testsc}}  coverage: /TOTAL.+ ([0-9.]+%)/
+{{testsc}}  script:
+{{testsc}}  - *definefuncs
+{{testsc}}  - *launch_test_stack
+{{testsc}}  - ./control.sh test
+{{testsc}}  - ./control.sh coverage
+{{testsc}}  - *writeokstatus
+{{testsc}}  - *waitafterjobs
+
+{{lintingc}}linting:
+{{lintingc}}  <<: [ *tests_tpl ]
+{{lintingc}}  variables:
+{{lintingc}}    <<: [ *test_vars_tpl ]
+{{lintingc}}    STATUS_FLAG: ${LINT_STATUS_FLAG}
+{{lintingc}}  script:
+{{lintingc}}  - *definefuncs
+{{lintingc}}  - *launch_test_stack
+{{lintingc}}  - ./control.sh linting
+{{lintingc}}  - *writeokstatus
+{{lintingc}}  - *waitafterjobs
+
+.release_image: &release_image_tpl
+  <<: [ *build_tpl ]
+  script:
+  # redo the docker login, without the /bin/true, so failing if the registry is down
+  - *definefuncs
+  - &release_step1 sh /docker_login
+  # quoting & subshelling to work around gitlab variable substitutions
+  # we release at least one image in the dockerbuildcache registry,
+  # one for release on the tag branch and one for latest when master branch
+  - &release_tags |-
+    export f=${CI_PROJECT_DIR}/releasedimgs
+    set -e
+    cat>${f}<<EOF
+    ${BUILDCACHE_CURRENT_DOCKER_IMAGE}-nosquash-dev ${BUILDCACHE_REF_DOCKER_IMAGE}-nosquash-dev
+    ${BUILDCACHE_CURRENT_DOCKER_IMAGE}-nosquash     ${BUILDCACHE_REF_DOCKER_IMAGE}-nosquash
+    EOF
+    #
+    if [ "x${CI_COMMIT_REF_NAME}" = "x${LATEST_BRANCH}" ];then cat>>${f}<<EOF
+    ${BUILDCACHE_CURRENT_DOCKER_IMAGE}-dev ${BUILDCACHE_LATEST_DOCKER_IMAGE}-dev
+    ${BUILDCACHE_CURRENT_DOCKER_IMAGE}     ${BUILDCACHE_LATEST_DOCKER_IMAGE}
+    EOF
+    fi
+    if ( echo ${CI_COMMIT_REF_NAME} | egrep -q "$TAGGUABLE_IMAGE_BRANCH" );then cat>>${f}<<EOF
+    ${BUILDCACHE_CURRENT_DOCKER_IMAGE}-dev ${REF_DOCKER_IMAGE}-dev
+    ${BUILDCACHE_CURRENT_DOCKER_IMAGE}     ${REF_DOCKER_IMAGE}
+    EOF
+      if [ "x${CI_COMMIT_REF_NAME}" = "x${LATEST_BRANCH}" ];then cat>>${f}<<EOF
+    ${BUILDCACHE_CURRENT_DOCKER_IMAGE}-dev ${LATEST_DOCKER_IMAGE}-dev
+    ${BUILDCACHE_CURRENT_DOCKER_IMAGE}     ${LATEST_DOCKER_IMAGE}
+    EOF
+      fi
+    fi
+    while read i;do vv docker tag $(eval echo ${i});done < ${f}
+  # release in batch built docker images in parrallel to both cached and release registries
+  - &release_push |-
+    sh -c '. ${WORKSPACE}/funcs
+    export f=${CI_PROJECT_DIR}/releasedimgs
+    log "Pushing release file:"
+    cat ${f} >&2
+    ret=$(mktemp)
+    for i in "$(awk '"'"'{print $2}'"'"' ${f}|egrep    -- ${BUILDCACHE_REGISTRY})" \
+             "$(awk '"'"'{print $2}'"'"' ${f}|egrep -v -- ${BUILDCACHE_REGISTRY})";do
+      imgs=$(eval echo ${i});(for img in ${imgs};do vv docker push ${img};echo "$? ${img}">>${ret};done)&
+    done
+    wait
+    log "END push:"
+    cat ${ret}
+    if !( egrep -q ^0 ${ret} );then exit 1;fi'
+  - *writeokstatus
+  - *waitafterjobs
+  variables: &release_vars
+    GIT_SUBMODULE_STRATEGY: none
+    STATUS_FLAG: ${RELEASE_STATUS_FLAG}
+    BEFORE_STATUS_FLAGS: "{% if cookiecutter.test_tests %}${TESTS_STATUS_FLAG}{%endif%}"
+    # move lint to ${BEFORE_STATUS_FLAGS} if you want it to block release
+    BEFORE_ALLOW_FAILURE_STATUS_FLAGS: "{%if cookiecutter.test_linting%}${LINT_STATUS_FLAG}{%endif%}"
+
+release_image: &release_taggued_image_tpl
+  <<: [ *release_image_tpl ]
+  start_in: 180 seconds
+
+# the job will catch any failure on build stage and create a file upon success or failure
+# the real goal is for teardown jobs in the next stage to run, in any cases
+flag_success: &flag_success_tpl
+  tags: ["{{cookiecutter.runner_tag}}"]
+  stage: end_flag
+  before_script: []
+  services: []
+  image: {name: "${DOCKERDIND_IMAGE}", entrypoint: [""]}
+  variables:
+    GIT_SUBMODULE_STRATEGY: none
+  script:
+  - echo 0 > $(eval echo "${PIPELINE_FLAG}")
+flag_failure:
+  <<: [ *flag_success_tpl ]
+  when: on_failure
+  script:
+  - echo 1 > $(eval echo "${PIPELINE_FLAG}")
+
+.teardown: &teardown_tpl
+  tags: ["{{cookiecutter.runner_tag}}"]
+  stage: post_release
+  when: always
+  before_script: []
+  services: []
+
+teardown_workspace: &teardown_workspace_tpl
+  <<: [ *teardown_tpl ]
+  script:
+  - &teardown_ws rm -rfv "${WORKSPACE}"
+
+manual_teardown_workspace:
+  <<: [ *manual_job_tpl, *teardown_workspace_tpl ]
+
+manual_teardown_images: &teardown_images_tpl
+  <<: [ *manual_job_tpl ]
+  image: {name: "${DOCKERDIND_IMAGE}", entrypoint: [""]}
+  services: []
+  before_script: []
+  script:
+  - rm -rf ${BUILDCACHE_ROOTDIRECTORY}
+
+.deploy_tpl: &deploy_tpl
+  tags: ["{{cookiecutter.runner_tag}}"]
+  image: ${CORPUSPOS_IMAGE}
+  stage: post_release
+  services: []
+  when: manual
+  # allow further jobs to be executed in //
+  variables: &deploy_vars_tpl
+    NONINTERACTIVE: "1"
+    DEPLOY_PLAYBOOK: .ansible/playbooks/app.yml
+    NO_SILENT: ""
+  before_script:
+{%-if cookiecutter.use_submodule_for_deploy_code%}
+  - *pullsubmodules
+{%endif%}
+  # make this in only one block to be easily reusable in deploy jobs
+  - &deploy_setup set -e;vv(){ echo "$@">&2;"$@"; };
+    if [ "x${A_ENV_NAME}" = x ];then
+    echo "\$A_ENV_NAME is not set, bailing out" >&2 ;exit 1;fi;
+    vv .ansible/scripts/download_corpusops.sh;
+    vv .ansible/scripts/setup_ansible.sh;
+  - &deploy_key_setup set -e;vv(){ echo "$@">&2;"$@"; };vv
+    .ansible/scripts/call_ansible.sh -vv .ansible/playbooks/deploy_key_setup.yml
+  script:
+  - .ansible/scripts/call_ansible.sh -vv -l $A_ENV_NAME "${DEPLOY_PLAYBOOK}"
+
+{% for i in envs %}{%- if cookiecutter[i+'_host'] -%}
+deploy_{{i}}: &deploy_{{i}}
+  <<: [ *deploy_tpl ]
+  only: [tags, {% if i in ['dev']%}master, {%endif%}{{cookiecutter[i+'_branch']}}]
+  except: []
+  variables: &deploy_{{i}}_vars
+    <<: [ *deploy_vars_tpl ]
+    A_ENV_NAME: {{i}}
+  when: {{ i in ['dev'] and 'on_success' or 'manual' }}
+  environment:
+    name: {{i}}
+    url: https://{{cookiecutter[i+'_domain']}}
+
+{%endif-%}{% endfor %}
+# Allow to immediatly trigger a deploy without waiting for the full pipeline to complete
+# eg: redeploying after only issuing a deploy code or configuration change.
+{% for i in envs %}{%- if cookiecutter[i+'_host'] -%}
+manual_deploy_{{i}}: &manual_deploy_{{i}}
+  <<: [ *manual_job_tpl, *deploy_{{i}} ]
+  only: [master, {{cookiecutter[i+'_branch']}}]
+{%endif-%}{% endfor %}
+
+# As gitlab-ci does not support pipeline branching, for manual dev release, we need
+# to make a last and one-for-all deploy step for non-blocking pipelines when we do a merge request
+{% for i in envs %}{%- if cookiecutter[i+'_host'] -%}
+manual_release_and_deploy_{{i}}: &manual_release_and_deploy_{{i}}_tpl
+  <<: [ *deploy_{{i}}, *release_image_tpl ]
+  variables:
+    <<: [ *build_images_vars, *release_vars, *deploy_{{i}}_vars ]
+    A_ENV_NAME: {{i}}
+    REF_DOCKER_IMAGE: ${FORCED_DOCKER_IMAGE}
+    LATEST_DOCKER_IMAGE: ${FORCED_DOCKER_IMAGE}
+    BEFORE_STATUS_FLAGS: ""
+    BEFORE_ALLOW_FAILURE_STATUS_FLAGS: ""
+    AFTER_STATUS_FLAGS: ""
+    AFTER_ALLOW_FAILURE_STATUS_FLAGS: ""
+  when: manual
+  start_in: null
+  image: ${CORPUSPOS_IMAGE}
+  stage: manual_jobs
+  allow_failure: true
+  services: *services_tpl
+  before_script: *full_before_script
+  script:
+  - *waitbeforejobs
+  - *definefuncs
+  - *build_step1
+  - *release_step1
+  - *release_tags
+  - *release_push
+  - *deploy_setup
+  - *deploy_key_setup
+  - &deploy_manual_cmd |-
+    set -e;.ansible/scripts/call_ansible.sh -vv -l $A_ENV_NAME \
+    "${DEPLOY_PLAYBOOK}" -e "{cops_mltrainer_docker_tag: $(eval echo ${REF_DOCKER_IMAGE//*:})}"
+  after_script: []
+
+{%endif-%}{% endfor %}

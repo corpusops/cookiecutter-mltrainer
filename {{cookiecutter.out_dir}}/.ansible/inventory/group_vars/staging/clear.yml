@@ -1,0 +1,2 @@
+---
+cops_{{cookiecutter.app_type}}_deploy_env: staging

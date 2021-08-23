@@ -1,0 +1,37 @@
+# core
+# libs
+
+# connectors
+{%- if cookiecutter.cache_system == 'memcached'%}
+python-memcached
+{%endif %}
+
+{% if cookiecutter.with_pil %}
+Pillow>=5.3.0,<6.0.0
+{% endif %}
+
+{% if cookiecutter.with_ia_libs -%}
+# IASD
+numpy
+pandas
+keras
+begins
+{% endif -%}
+
+tensorflow{{cookiecutter.tensorflow_requirement}}
+mlflow{{cookiecutter.mlflow_requirement}}
+
+{%- if cookiecutter.with_sentry %}
+# sentry (need requests)
+raven==6.10.0
+{% endif%}
+requests>=2.25.0
+
+# pined down by tensorflow2
+scipy==1.4.1
+# prod with minio
+boto3>=1.15.11
+
+# leave those tools to let debug in hosted envs
+remote-pdb
+pdb_clone
