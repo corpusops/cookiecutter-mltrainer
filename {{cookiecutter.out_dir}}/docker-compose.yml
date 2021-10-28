@@ -34,6 +34,8 @@ x-images:
     - ./sys/scripts:/code/sys/scripts
     - logs:/logs/
     - ./data:/code/data
+    - ./notebooks:/code/notebooks
+    - ./models:/code/models
 services:
   {{cookiecutter.app_type}}:
     <<: [ *{{cookiecutter.app_type}} ]
