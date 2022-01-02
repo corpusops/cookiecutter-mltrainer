@@ -35,6 +35,43 @@ local/*/bin/cops_apply_role --become \
   [docker](https://docs.docker.com/install/#releases) and
   [docker-compose](https://docs.docker.com/compose/install/).
 
+{% if cookiecutter.with_nvidia %}
+## configure Nvidia docker
+```bash
+distribution=$(. /etc/os-release;echo $ID$VERSION_ID) \
+   && curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add - \
+      && curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | sudo tee /etc/apt/sources.list.d/nvidia-docker.list
+curl -s -L https://nvidia.github.io/nvidia-container-runtime/experimental/$distribution/nvidia-container-runtime.list | sudo tee /etc/apt/sources.list.d/nvidia-container-runtime.list
+sudo apt-get update
+# WARNING: do not accept any modification to /etc/docker/daemon.json
+sudo apt-get install -y nvidia-docker2
+```
+
+Patch(add `runtimes`) (or create) in `/etc/docker/daemon.json`:
+
+```json
+{
+"runtimes": {"nvidia": {"path": "nvidia-container-runtime", "runtimeArgs": []}}
+}
+```
+
+Finaly, restart docker
+```
+sudo systemctl restart docker
+```
+
+This command should then work
+```
+sudo docker run --rm --gpus all nvidia/cuda:11.2.1-base nvidia-smi
+```
+
+If you get this kind of message `stderr: nvidia-container-cli: requirement error: unsatisfied condition: cuda>=11.2, please update your driver to a newer version, or use an earlier cuda container: unknown.`, Try to get a lower tag on [this link](https://hub.docker.com/r/nvidia/cuda/tags?page=1&ordering=last_updated&name=-base)
+
+Example:
+```
+sudo docker run --rm --gpus all nvidia/cuda:9.1-base nvidia-smi
+```
+{% endif %}
 
 ## Update corpusops
 You may have to update corpusops time to time with

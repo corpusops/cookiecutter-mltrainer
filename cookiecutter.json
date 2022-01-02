@@ -1,5 +1,6 @@
 {
     "name": "myapp",
+    "with_nvidia": "y",
     "py_ver": "3.8",
     "git_ns": "{{cookiecutter.name}}-group",
     "lname": "{{cookiecutter.name|lower}}",
@@ -63,7 +64,9 @@
     "no_lib": "",
     "node_version": "10.16.0",
     "node_image": "corpusops/node:{{'.'.join(cookiecutter.node_version.split('.')[:2])}}",
-    "base_image": "corpusops/ubuntu-bare:20.04",
+    "default_base_image": "corpusops/ubuntu-bare:20.04",
+    "nvidia_base_image": "corpusops/tensorflow-serving:latest-gpu",
+    "base_image": "{{ cookiecutter [((cookiecutter.with_nvidia and 'nvidia') or 'default')+'_base_image'] }}",
     "registry_image": "registry:2",
     "compose_image": "docker/compose:1.27.4",
     "docker_test_image": "busybox",

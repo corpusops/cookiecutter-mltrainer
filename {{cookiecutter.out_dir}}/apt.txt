@@ -1,4 +1,5 @@
 # for teleport, do not remove
+{% set gcc = 'tensorflow' in cookiecutter.base_image and '8' or '9' %}
 openssh-client
 rsync
 # runtime dependencies
@@ -44,9 +45,9 @@ libxcb1
 apt-utils
 build-essential
 gpg
-libgcc-9-dev
+libgcc-{{gcc}}-dev
 libproj-dev
-libstdc++-9-dev
+libstdc++-{{gcc}}-dev
 llvm-10-dev
 procps
 python{{cookiecutter.py_ver}}-dev

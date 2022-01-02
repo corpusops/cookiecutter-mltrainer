@@ -30,6 +30,9 @@ x-images:
       MLFLOW_TRACKING_INSECURE_TLS: "${MLFLOW_TRACKING_INSECURE_TLS:-true}"
       ARTIFACTS_ROOT: "${ARTIFACTS_ROOT:-s3://minio}"
       DATA_PATH: "${DATA_PATH:-/code/data}"
+    {% if cookiecutter.with_nvidia%}
+    runtime: nvidia
+    {%endif%}
     volumes:
     - ./sys/scripts:/code/sys/scripts
     - logs:/logs/
